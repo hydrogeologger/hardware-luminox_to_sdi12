@@ -1,0 +1,132 @@
+# https://github.com/github-linguist/linguist/blob/master/docs/overrides.md
+# https://github.com/github-linguist/linguist/blob/master/lib/linguist/languages.yml
+# Basic .gitattributes for git-config files
+# =========================================
+# These files are text and should be normalized (Convert crlf => lf)
+*.gitattributes text eol=lf
+.gitignore      text eol=lf
+
+# Exclude files from exporting
+.gitattributes  export-ignore
+.gitignore      export-ignore
+
+# Enable syntax highlighting for files with `.gitattributes` extensions.
+*.gitattributes linguist-language=gitattributes
+*.gitattributes linguist-detectable=false
+*.gitattributes linguist-documentation=true
+
+
+# General .gitattributes repo.
+# ============================
+*.txt   text
+*.csv   text
+*.md    text eol=lf diff=markdown linguist-documentation
+
+# LTSpice Files
+*.asc text eol=lf linguist-language=AsciiDoc linguist-detectable
+*.asy text linguist-language=LTspice-Symbol linguist-detectable
+
+# Other Electrical Symbols
+*.cir text
+
+# Archives
+*.zip binary diff=exif
+
+# Documents
+*.docx binary diff=docx
+*.xlsx binary diff=xlsx
+*.pdf binary diff=pdf
+
+
+# Basic .gitattributes for Altium repo.
+# =====================================
+*.DsnWrk binary
+*.PrjPcb binary linguist-detectable
+*.PrjPcbVariants binary
+*.SchDoc binary linguist-detectable
+*.PcbDoc binary linguist-detectable
+*.PCBDwf binary
+*.Harness binary
+*.BomDoc binary
+*.OutJob binary linguist-detectable
+*.cam binary
+*.DXPPrf binary
+*.Annotation binary
+
+# Libraries
+*.PcbLib binary
+*.SchLib binary
+
+# 3D body parts
+*.[sS][tT][eE][pP]  binary
+*.[sS][tT][pP] binary
+
+# Gerber
+*.gbr binary linguist-detectable
+## Copper Layer
+*.gtl binary linguist-detectable
+*.gbl binary linguist-detectable
+*.gb[1-9] binary
+## Mechanical Layer
+*.gm binary
+*.gm[1-9]* binary
+## Silkscreen
+*.gto binary linguist-detectable
+*.gbo binary linguist-detectable
+## Solder Mask
+*.gts binary linguist-detectable
+*.gbs binary linguist-detectable
+## Paste Mask
+*.gtp binary linguist-detectable
+*.gbp binary linguist-detectable
+## keep out
+*.gko binary linguist-detectable
+## Pads Layer
+*.gpt binary linguist-detectable
+*.gpb binary linguist-detectable
+## Drill info
+*.gd1 binary
+*.gg1 binary
+*.txt binary
+
+
+# Basic .gitattributes for a C++/Arduino repo.
+# ======================================
+# C++/Arduino Sources
+*.c     text diff=cpp
+*.cc    text diff=cpp
+*.cxx   text diff=cpp
+*.cpp   text diff=cpp
+*.cpi   text diff=cpp
+*.c++   text diff=cpp
+*.hpp   text diff=cpp
+*.h     text diff=cpp
+*.h++   text diff=cpp
+*.hh    text diff=cpp
+*.ino   text diff=cpp
+
+# Compiled Object files
+*.slo   binary
+*.lo    binary
+*.o     binary
+*.obj   binary
+
+# Precompiled Headers
+*.gch   binary
+*.pch   binary
+
+# Compiled Dynamic libraries
+*.so    binary
+*.dylib binary
+*.dll   binary
+
+# Compiled Static libraries
+*.lai   binary
+*.la    binary
+*.a     binary
+*.lib   binary
+
+# Executables
+*.exe   binary
+*.out   binary
+*.app   binary

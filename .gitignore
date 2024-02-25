@@ -1,0 +1,52 @@
+# https://github.com/Fermium/altium-on-git/blob/master/.gitignore
+
+### Altium ###
+# Previews Files and Folders
+**/__Previews/
+*.SchDocPreview
+*.PcbDocPreview
+
+# History Folders
+**/History/*
+
+# Project Logs
+**/Project\ Logs*/
+
+# Project Outputs
+**/Project\ Outputs*/
+
+# Auto-conversion notices
+*.PcbDoc.htm
+
+# Access lock file for dbLib sources
+**/*.ldb
+
+# Altium Structure files, generated each time recompiled
+*.PrjPCBStructure
+*.PrjMbdStructure
+
+
+### LTspice ###
+# gitignore template for LTspice
+# Logfile
+*.log
+
+# Simulation Outputs
+*.raw
+*.fft
+
+# Netlist
+*.net
+
+
+### Python ###
+# Python cache folder
+**/__pycache__/*
+
+
+### VSCode ###
+**/.vscode/*
+
+
+### platformio ###
+**/.pio/*
