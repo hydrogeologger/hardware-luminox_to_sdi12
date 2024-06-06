@@ -27,8 +27,7 @@
  *  - Make an int variable for the "number of values to report" instead of the
  *    hard-coded 9s interspersed throughout the code
  */
-
-#include <SDI12Slave.h>
+#include <SDI12Node.h>
 #include <SDI12CRC.h>
 #include <SDI12Sensor.h>
 
@@ -41,52 +40,70 @@
 #define MEASUREMENT_STR_ARRAY_MAX_ELEMENT 10 // Max number of array elements for 0Dx! string response
 
 #define SDI12SENSOR_SDI12_PROTOCOL "13"  // Respresent v1.3
-#define SDI12SENSOR_COMPANY "UQGEC"  // 8 Charactors depicting company name
-#define SDI12SENSOR_MODEL "000000"  // 6 Characters specifying sensor model
-#define SDI12SENSOR_VERSION "0.1"  // 3 characters specifying sensor version
+#define SDI12SENSOR_COMPANY "UQGEC   "  // 8 Charactors depicting company name
+#define SDI12SENSOR_MODEL "OXLUM "  // 6 Characters specifying sensor model
+#define SDI12SENSOR_VERSION "002"  // 3 characters specifying sensor version, Represent x.x.x
 #define SDI12SENSOR_OTHER_INFO "LUMINOX"  // (optional) up to 13 char for serial or other sensor info
 
+#define STATE_LOW_POWER 0
+#define STATE_DO_SOMETHING 1
+#define STATE_SERIAL_PASSTHROUGH 2
+
+typedef enum ExtendedCommand_e: uint8_t {
+    kEXTModeSelect      = 1,    // Sensor mode select, aXMx!
+    kEXTPassThrough     = 2,    // Pass Through Mode, aXPAS!
+    kEXTConfiguration   = 3     // Sensor Configuration, aXU
+} ExtendedCommand_e;
+
+
 // Create object by which to communicate with the SDI-12 bus on SDIPIN
-SDI12Slave slaveSDI12(DATA_PIN);
-SDI12Sensor sensor('0', SDI12_ADDRESS_EEPROM_ADDRESS);
+SDI12Node slaveSDI12(DATA_PIN);
+SDI12Sensor sensor('0');
 
 static uint8_t measurement_count = 0;
 
-void pollSensor(float* measurementValues, char command) {
-    // measurementValues[0] = 1.1;
-    // measurementValues[1] = -2.22;
-    // measurementValues[2] = 3.333;
-    // measurementValues[3] = -4.4444;
-    // measurementValues[4] = 5.55555;
-    // measurementValues[5] = -6.666666;
-    // measurementValues[6] = 78.777777;
-    // measurementValues[7] = -890.888888;
-    // measurementValues[8] = -0.11111111;
-
-    // Empty rx buffer
-    while (Serial.available()) {
-        Serial.read();
+char SelectLuminoxMode(int8_t mode) {
+    char mode_str[5];
+    switch (mode) {
+        case 0:
+            strcpy(mode_str, "M 0"); // Stream mode
+            break;
+        case 1:
+            strcpy(mode_str, "M 1"); // Poll mode
+            break;
+        case 2:
+            strcpy(mode_str, "M 2"); // Off
+            break;
+        default:
+            strcpy(mode_str, "M");
+            break;
     }
+    while (Serial.available()) { Serial.read(); } // Empty input buffer
+    Serial.println(mode_str);
+    String response = Serial.readStringUntil('\n');
+    return response[3];
+}
 
-    // Poll Oxygen
-    Serial.print(String(command) + "\r\n"); // Send command to initiate polling mode
-    Serial.flush();
-    delay(1000);
-
+uint8_t ProcessLuminoxPayloadStream(float *measurementValues) {
+    uint8_t count = 0; // Number of data values detected
     String luminoReply = "";
-    uint8_t inChar;
+    char inChar;
     while (Serial.available()) {
         inChar = Serial.read();
         if ((inChar >= 48 && inChar <= 57) || // 0-9
                 (inChar >= 43 && inChar <= 46) // [+,-.]
                 ) {
-            luminoReply += (char)inChar;
-        } else if (inChar == 'T' || inChar == 'P' || inChar == '%' || inChar == 'e') {
-            luminoReply += ',';
-        } else if (inChar == '\n') {
+            luminoReply += inChar;
+        } else if (inChar == 'O' || inChar == 'T' || inChar == 'P' || inChar == '%' || inChar == 'e') {
+            if (count > 0) { luminoReply += ','; }
+            count++;
+        } else if (inChar == '\r' || inChar == '\n') {
             break;
         }
+        delay(2);
     }
+
+    if (count == 0) { return count; }
 
     int8_t charPos = 0;
     uint8_t i = 0;
@@ -96,31 +113,78 @@ void pollSensor(float* measurementValues, char command) {
         charPos = luminoReply.indexOf(",", charPos) + 1;
     } while (charPos > 0);
 
+    return count;
+}
+
+void pollSensor(float *measurementValues, char command) {
+    // Empty rx buffer
+    while (Serial.available()) {
+        Serial.read();
+    }
+
+    // Send polling command
+    Serial.println(command);
+    Serial.flush();
+
+    // delay(1000);
+    // Blocking delay until a character exist in serial buffer
+    while (!Serial.available());
+
     // Zero remaining
-    for (i; i < MEASUREMENT_ARRAY_MAX_SIZE; i++) {
+    for (uint8_t i = ProcessLuminoxPayloadStream(measurementValues);
+            i < MEASUREMENT_ARRAY_MAX_SIZE; i++) {
         measurementValues[i] = 0;
     }
 }
 
-void pollOxygenSensorInfo(String* dValues) {
+void pollOxygenSensorInfo(String *dValues) {
     // Empty rx buffer
     while (Serial.available()) {
         Serial.read();
     }
 
     // Poll Oxygen
-    Serial.print("# 0\r\n"); // Send command to initiate polling mode
+    Serial.println(F("# 0")); // Send command to initiate polling mode
     Serial.flush();
     dValues[0] = Serial.readStringUntil('\r');
-    Serial.print("# 1\r\n"); // Send command to initiate polling mode
+
+    Serial.println(F("# 1")); // Send command to initiate polling mode
     Serial.flush();
     dValues[1] = Serial.readStringUntil('\r');
-    Serial.print("# 2\r\n"); // Send command to initiate polling mode
+
+    Serial.println(F("# 2")); // Send command to initiate polling mode
     Serial.flush();
     dValues[2] = Serial.readStringUntil('\r');
+
+    for (int i=0; i <= 2; i++) {
+        dValues[i].trim();
+    }
 }
 
-void parseSdi12Cmd(String command, SDI12CommandSet_s *parsed_cmd) {
+void ExtendedCommandRules(const char* cmd, SDI12Command *parsed_cmd) {
+    if (parsed_cmd->primary != kExtended) { return; }
+
+    if (cmd[0] == 'M' && BITS_IS_SET(parsed_cmd->flags, CMD_IS_END_FLAG)
+            && (isdigit(cmd[1]) || cmd[1] == '\0' || cmd[1] == '!')) {
+        // aXMx!, aXM!
+        parsed_cmd->secondary = kEXTModeSelect;
+        if (!BITS_IS_SET(parsed_cmd->flags, CMD_PARAM1_FLAG)) {
+            parsed_cmd->param1 = -1; // aXM!
+        }
+    } else if (cmd[0] == 'U' &&
+            (cmd[1] == ',' || BITS_IS_SET(parsed_cmd->flags, CMD_IS_END_FLAG))) {
+        // aXU
+        parsed_cmd->secondary = kEXTConfiguration;
+    } else if (BITS_IS_SET(parsed_cmd->flags, CMD_IS_END_FLAG) &&
+            !strcmp("PAS", cmd)) {
+        // aXPAS!
+        parsed_cmd->secondary = kEXTPassThrough;
+    } else {
+        parsed_cmd->primary = kUnknown;
+    }
+}
+
+void parseSdi12Cmd(String command, SDI12Command *parsed_cmd) {
     /* Ingests a command from an SDI-12 master, sends the applicable response, and
      * (when applicable) sets a flag to initiate a measurement
      */
@@ -128,19 +192,15 @@ void parseSdi12Cmd(String command, SDI12CommandSet_s *parsed_cmd) {
     // First char of command is always either (a) the address of the device being
     // probed OR (b) a '?' for address query.
     // Do nothing if this command is addressed to a different device
-    *parsed_cmd = SDI12Sensor::ParseCommand(command.c_str());
-    if (parsed_cmd->address == sensor.Address()) {
+    char *ext_cmd = nullptr;
+    *parsed_cmd = SDI12Command::ParseCommand(command.c_str(), sensor.Address(), &ext_cmd);
+    if (parsed_cmd->address == sensor.Address() || parsed_cmd->address == '?') {
         sensor.SetActive();
-    } else if (parsed_cmd->primary == kAddressQuery) {
-        // Let loop handle "?!" command
-        sensor.SetActive();
-        sensor.SetState(kStateReady);
-        return;
     } else {
         return;
     }
 
-    SDI12Sensor::LastActive()->DefineState(*parsed_cmd);
+    ExtendedCommandRules(ext_cmd, parsed_cmd);
 
     // If execution reaches this point, the slave should respond with something in
     // the form:   <address><responseStr><Carriage Return><Line Feed>
@@ -149,10 +209,11 @@ void parseSdi12Cmd(String command, SDI12CommandSet_s *parsed_cmd) {
     // or 'a!' (acknowledge active) commands, responseStr is blank so section is skipped
     String responseStr = "";
     responseStr = SDI12Sensor::LastActive()->Address();
-    // Only perform some basic sensor operations here, i.e aI! and a!
     switch ((SDI12SensorCommand_e)parsed_cmd->primary) {
+        case kAddressQuery: // Fall Through
         case kAcknowledge:
-            break; // Do not need to do anything
+            // Do not need to do anything
+            break;
         case kIdentification:
             if (parsed_cmd->secondary == kUnknown) {
                 // Identify command
@@ -160,10 +221,16 @@ void parseSdi12Cmd(String command, SDI12CommandSet_s *parsed_cmd) {
                 // company name + 6-char sensor model + 3-char sensor version + 0-13
                 // char S/N
                 responseStr += SDI12SENSOR_SDI12_PROTOCOL \
-                SDI12SENSOR_COMPANY \
-                SDI12SENSOR_MODEL \
-                SDI12SENSOR_VERSION \
-                SDI12SENSOR_OTHER_INFO;
+                        SDI12SENSOR_COMPANY \
+                        SDI12SENSOR_MODEL \
+                        SDI12SENSOR_VERSION \
+                        SDI12SENSOR_OTHER_INFO;
+            } else {
+                if (parsed_cmd->param2 <= 0) {
+                    parsed_cmd->Reverse(); // Swap primary and secondary command around.
+                }
+                SDI12Sensor::LastActive()->SetState(STATE_DO_SOMETHING); // Handle in main loop
+                return;
             }
             break;
         case kAddressChange:
@@ -175,20 +242,68 @@ void parseSdi12Cmd(String command, SDI12CommandSet_s *parsed_cmd) {
             break;
         case kUnknown:
             // For DEBUG
-            responseStr += "UNK\r\n";
+            responseStr += "UNK";
+            break;
+        case kExtended:
+            switch ((ExtendedCommand_e)parsed_cmd->secondary) {
+                case kEXTConfiguration:
+                    responseStr += "XU,";
+                    break;
+                case kEXTPassThrough:
+                    responseStr += ext_cmd;
+                    sensor.SetActive(false);
+                    break;
+                case kEXTModeSelect:
+                    responseStr += "XM=";
+                    responseStr += SelectLuminoxMode(parsed_cmd->param1);
+                    break;
+            }
             break;
         default:
+            SDI12Sensor::SetState(STATE_DO_SOMETHING);
             return; // Handle everything else in loop
     }
 
     if (SDI12Sensor::IsSetLastActive()) {
+        // Issue the response speficied in the switch-case structure above.
         responseStr += "\r\n";
         slaveSDI12.sendResponse(responseStr);
         SDI12Sensor::ClearLastActive();
     }
 }
 
-void formatOutputSDI(float* measurementValues, String* dValues, uint8_t data_count, unsigned int maxChar) {
+void EmptyOutputSDIBuffer(String *dValues) {
+    for (size_t i = 0; i < (sizeof(dValues) / sizeof(dValues[0])); i++) {
+        dValues[i] = "";
+    }
+}
+
+bool DetectedValidAddress(const char address) {
+    int avail = slaveSDI12.available();
+    if (avail == 0) { return false; }
+    char charReceived;
+    char *commandReceived = (char*) malloc((sizeof(char) * avail) + 1);
+    bool valid_address = false;
+
+    for (int i = 0; i < avail; i++) {
+        charReceived = slaveSDI12.read();
+        if (charReceived == '!') {
+            commandReceived[i] = '\0';
+            slaveSDI12.clearBuffer();
+            slaveSDI12.ClearLineMarkingReceived();
+            break;
+        } else {
+            commandReceived[i] = charReceived;
+        }
+    }
+
+    valid_address = (SDI12Command::ParseCommand(commandReceived, address).address == address);
+    free(commandReceived);
+    return valid_address;
+}
+
+uint8_t formatOutputSDI(float* measurementValues, String* dValues, uint8_t data_count, unsigned int maxChar) {
+    uint8_t count = 0;
     /* Ingests an array of floats and produces Strings in SDI-12 output format */
 
     dValues[0] = "";
@@ -211,23 +326,32 @@ void formatOutputSDI(float* measurementValues, String* dValues, uint8_t data_cou
         }
     }
 
+    if (data_count > 0) {
+        count = j + 1;
+    }
+
     // Fill rest of dValues with blank strings
     while (j < MEASUREMENT_ARRAY_MAX_SIZE) { dValues[++j] = ""; }
+    return count;
 }
+
 
 void setup() {
     slaveSDI12.begin();
     Serial.begin(9600);
+    Serial.setTimeout(1000);
     // delay(500);
     slaveSDI12.forceListen();  // sets SDIPIN as input to prepare for incoming message
-    Serial.print("M 1\r\n"); // Send command to initiate polling mode
+
+    SelectLuminoxMode(1);
+    Serial.flush();
 }
 
 void loop() {
     static float measurementValues[MEASUREMENT_ARRAY_MAX_SIZE];  // floats to hold sensor data
     static String dValues[MEASUREMENT_STR_ARRAY_MAX_ELEMENT];  // String objects to hold the responses to aD0!-aD9! commands
     static String commandReceived = "";  // String object to hold the incoming command
-    SDI12CommandSet_s parsed_cmd;
+    SDI12Command parsed_cmd;
     String response = "";
 
 
@@ -235,339 +359,343 @@ void loop() {
     // before proceding.  It may be more robust to add a single character per loop()
     // iteration to a static char buffer; however, the SDI-12 spec requires a precise
     // response time, and this method is invariant to the remaining loop() contents.
-    int avail = slaveSDI12.available();
-    if (avail < 0) {
-        slaveSDI12.clearBuffer();
-    } else if (avail > 0) {
+    if (slaveSDI12.available() < 0) {
         // Buffer is full; clear
-        for (int a = 0; a < avail; a++) {
-            char charReceived = slaveSDI12.read();
-            // Character '!' indicates the end of an SDI-12 command; if the current
-            // character is '!', stop listening and respond to the command
-            if (charReceived == '!') {
-                // eliminate the chance of getting anything else after the '!'
-                // Command string is completed; do something with it
-                parseSdi12Cmd(commandReceived, &parsed_cmd);
-                slaveSDI12.forceListen(); // Force listen if command is not recognized
-                // Clear command string to reset for next command
-                commandReceived = "";
-                // '!' should be the last available character anyway, but exit the "for"
-                // loop just in case there are any stray characters
-                slaveSDI12.ClearLineMarkingReceived(); // Clear detected break marking
-                slaveSDI12.clearBuffer();
-                break;
-            } else {
-                // If the current character is anything but '!', it is part of the command
-                // string.  Append the commandReceived String object.
-                // Append command string with new character
-                commandReceived += String(charReceived);
-            }
+        slaveSDI12.clearBuffer();
+    }
+    while (slaveSDI12.available() > 0) {
+        char charReceived = slaveSDI12.read();
+        // Character '!' indicates the end of an SDI-12 command; if the current
+        // character is '!', stop listening and respond to the command
+        if (charReceived == '!') {
+            // Command string is completed; do something with it
+            parseSdi12Cmd(commandReceived, &parsed_cmd);
+            slaveSDI12.forceListen(); // Force listen if command is not recognized
+            // Clear command string to reset for next command
+            commandReceived = "";
+            // '!' should be the last available character anyway, but exit the "for"
+            // loop just in case there are any stray characters
+            slaveSDI12.ClearLineMarkingReceived(); // Clear detected break marking
+            slaveSDI12.clearBuffer();
+            break;
+        } else if (charReceived >= 32 && charReceived <= 126) {
+            // For printable ascii characters only.
+            // If the current character is anything but '!', it is part of the command
+            // string.  Append the commandReceived String object.
+            // Append command string with new character
+            commandReceived += String(charReceived);
         }
+        delay(9);  // 1 character ~ 8.33 ms @ 1200 baud
     }
 
-    if (sensor.IsActive() || parsed_cmd.primary == kAddressQuery) {
-        response = sensor.Address();
-        switch ((SDI12SensorState_e)sensor.State()) {
-            case kStateLowPower:
-                break;
+    ProcessLuminoxPayloadStream(measurementValues);
 
-            case kStateReady:
-                if (parsed_cmd.primary == kAddressQuery) {
-                    // Do nothing for a!, response is already appropriate
-                } else if (parsed_cmd.primary == kDataRequest) {
-                    // For aDx!
-                    if (parsed_cmd.param1 < MEASUREMENT_STR_ARRAY_MAX_ELEMENT) {
-                        response += dValues[parsed_cmd.param1];
-                    }
-                    // Add CRC if requested for appropriate commands
-                    if (sensor.CrcRequested()) {
-                        SDI12CRC crc(response.c_str());
-                        response += crc.GetAscii();
-                    }
-                } else if (parsed_cmd.primary == kByteDataRequest) {
-                    // For aDBx!
-                    /* Not implemented, return respond with
-                     1 byte - ascii address
-                     2 byte - packet size
-                     1 byte - data type
-                     2 byte - crc if requested
-                     */
-                    slaveSDI12.sendResponse(""); // Empty send response just to send line marking
-                    slaveSDI12.writeBytes(sensor.Address());
-                    slaveSDI12.writeBytes((uint16_t)0); // Packet size
-                    slaveSDI12.writeBytes((uint8_t)kInvalidDataType); // Data type
-                    // No binary data payload to transmit
-                    if (sensor.CrcRequested()) {
-                        SDI12CRC crc(response.c_str()); // CRC of address
-                        crc.Add((uint16_t)0); // CRC of packet size
-                        crc.Add((uint8_t)kInvalidDataType); // CRC of data type
-                        // No binary data payload to calcualte CRC
-                        slaveSDI12.writeBytes(crc.Get()); // Write CRC to data line
-                    }
-                    sensor.SetActive(false); // Stop further ascii transmission
-                } else if (parsed_cmd.primary == kIdentification) {
-                    // For aIX_001! - aIX_999!
-                    // Identify Meta Group, for measurement field information,
-                    // max length is 75 not including crc and <CR><LF>
-                    /*
-                     Response should be in the following format ,<field1>,<field2>,<additional>;
-                     deliminated using ',' and ends with ';' followed by <CR><LF>
-                     field1 - is ideally using SHEF codes
-                     field2 - describes parameter units
-                     additional (optional) - additional fields are to deliminated using ','
-                    */
-                    if (parsed_cmd.secondary == kMeasurement || 
-                        parsed_cmd.secondary == kConcurrentMeasurement) {
-                        if ((parsed_cmd.param1 == 0 && parsed_cmd.param2 == 1) ||
-                                (parsed_cmd.param2 == 1 && parsed_cmd.param1 == 1)) {
-                            response += ",OXY,mbar,oxygen (O2) partial pressure;";
-                        } else if ((parsed_cmd.param1 == 0 && parsed_cmd.param2 == 2) ||
-                                (parsed_cmd.param2 == 1 && parsed_cmd.param1 == 2)) {
-                            response += ",%OX,%,oxygen (O2) percentage;";
-                        } else if ((parsed_cmd.param1 == 0 && parsed_cmd.param2 == 3) ||
-                                (parsed_cmd.param2 == 1 && parsed_cmd.param1 == 3)) {
-                            response += ",T,degrees C,sensor temperature;";
-                        } else if ((parsed_cmd.param1 == 0 && parsed_cmd.param2 == 4) ||
-                                (parsed_cmd.param2 == 1 && parsed_cmd.param1 == 4)) {
-                            response += ",P,mbar,barometric pressure;";
-                        } else if ((parsed_cmd.param1 == 0 && parsed_cmd.param2 == 5) ||
-                                (parsed_cmd.param2 == 1 && parsed_cmd.param1 == 5)) {
-                            response += ",E,number,error code;";
-                        }
-                    } else if (parsed_cmd.secondary == kContinuousMeasurement) {
-                        // Currently not implemented, add appropriate parameter
-                        // condition check for response
-                    } else if (parsed_cmd.secondary == kHighVolumeASCII) {
-                        // Currently not implemented, add appropriate parameter
-                        // condition check for response
-                    } else if (parsed_cmd.secondary == kHighVolumeByte) {
-                        // Currently not implemented, add appropriate parameter
-                        // condition check for response
-                    } else if (parsed_cmd.secondary == kVerification) {
-                        // Currently not implemented, add appropriate parameter
-                        // condition check for response
-                        switch (parsed_cmd.param2) {
-                            case 1:
-                                response += ",# 0,YYYYY DDDDD,manufacture date;";
-                                break;
-                            case 2:
-                                response += ",# 1,serial;";
-                                break;
-                            case 3:
-                                response += ",# 2,software rev;";
-                                break;
-                        }
-                    }
+    if (SDI12Sensor::state() != STATE_DO_SOMETHING || !sensor.IsActive()) {
+        return;
+    }
 
-                    // Add CRC if requested for appropriate commands
-                    if (parsed_cmd.param2 > 0 && sensor.CrcRequested()) {
-                        SDI12CRC crc(response.c_str());
-                        response += crc.GetAscii();
-                    }
-                }
+    response = sensor.Address();
+    // Do whatever the sensor is supposed to do here
+    switch (parsed_cmd.primary) {
+        case kMeasurement: {
+            // For aM!, aMx!, aMCx!
+            sensor.SetCrcRequest(parsed_cmd.CRC());
+            measurement_count = 0;
+            if (parsed_cmd.param1 == 0) {
+                measurement_count = 5;
+            } else if (parsed_cmd.param1 > 0 && parsed_cmd.param1 <= MEASUREMENT_ARRAY_MAX_SIZE) {
+                measurement_count = 1;
+            }
 
-                break;
-
-            case kStateMeasurement:
-                // For aM! and aMx! commands
-                // Do whatever the sensor is supposed to do here
-                // For this example, we will just create arbitrary "simulated" sensor data
-                // NOTE: Your application might have a different data type (e.g. int) and
-                //       number of values to report!
-                // Response should be in following format atttn<CR><LF>
-                if (parsed_cmd.param1 >= 0 && parsed_cmd.param1 <= MEASUREMENT_ARRAY_MAX_SIZE) {
-                    response += "002";
-                    if (parsed_cmd.param1 > 0) {
-                        measurement_count = 1;
-                    } else {
-                        measurement_count = 5;
-                    }
-                    response += String(measurement_count);
-                    // No need to perform measurement if identification requested
-                    if (parsed_cmd.primary == kIdentification) { break; }
-                    response += "\r\n";
-                    slaveSDI12.sendResponse(response);
-                    // delay(2000); // 2 Second delay to simulate sensor measurement
-                    switch (parsed_cmd.param1) {
-                        case 1: // Request Oxygen 'O'
-                            pollSensor(measurementValues, 'O');
-                            break;
-                        case 2:
-                            pollSensor(measurementValues, '%');
-                            break;
-                        case 3:
-                            pollSensor(measurementValues, 'T');
-                            break;
-                        case 4:
-                            pollSensor(measurementValues, 'P');
-                            break;
-                        case 5:
-                            pollSensor(measurementValues, 'e');
-                            break;
-                        default: // All values
-                            pollSensor(measurementValues, 'A');
-                            break;
-                    }
-                } else {
-                    response += "0000";
-                    // No need to perform measurement if identification requested
-                    if (parsed_cmd.primary == kIdentification) { break; }
-                    response += "\r\n";
-                    slaveSDI12.sendResponse(response);
-                    sensor.SetActive(false);
-                }
-
-                // For compliance to cancel measurement if a line break is detected
-                if (slaveSDI12.LineBreakReceived() || !sensor.IsActive()) {
-                    for (size_t i = 0; i < (sizeof(dValues)/sizeof(*dValues)); i++) {
-                        dValues[i] = "";
-                    }
-                    sensor.SetActive(false);
-                } else {
-                    // Populate the "dValues" String array with the values in SDI-12 format
-                    formatOutputSDI(measurementValues, dValues, measurement_count, SDI12_VALUES_STR_SIZE_35);
-                    // For aM!, Send "service request" (<address><CR><LF>) when data is ready
-                    response = sensor.Address();
-                }
-                slaveSDI12.ClearLineMarkingReceived();
-                break;
-
-            case kStateConcurrent:
-                // For aC! and aCx! commands
-                // Do whatever the sensor is supposed to do here
-                // For this example, we will just create arbitrary "simulated" sensor data
-                // NOTE: Your application might have a different data type (e.g. int) and
-                //       number of values to report!
-                // Response should be in following format atttnn<CR><LF>
-                if (parsed_cmd.param1 >= 0 && parsed_cmd.param1 <= MEASUREMENT_ARRAY_MAX_SIZE) {
-                    response += "0020";
-                    if (parsed_cmd.param1 > 0) {
-                        measurement_count = 1;
-                    } else {
-                        measurement_count = 5;
-                    }
-                    response += String(measurement_count);
-                    // No need to perform measurement if identification requested
-                    if (parsed_cmd.primary == kIdentification) { break; }
-                    response += "\r\n";
-                    slaveSDI12.sendResponse(response);
-                    // delay(2000); // 2 Second delay to simulate sensor measurement
-                    switch (parsed_cmd.param1) {
-                        case 1: // Request Oxygen 'O'
-                            pollSensor(measurementValues, 'O');
-                            break;
-                        case 2:
-                            pollSensor(measurementValues, '%');
-                            break;
-                        case 3:
-                            pollSensor(measurementValues, 'T');
-                            break;
-                        case 4:
-                            pollSensor(measurementValues, 'P');
-                            break;
-                        case 5:
-                            pollSensor(measurementValues, 'e');
-                            break;
-                        default: // All values
-                            pollSensor(measurementValues, 'A');
-                            break;
-                    }
-                } else {
-                    response += "00000";
-                    // No need to perform measurement if identification requested
-                    if (parsed_cmd.primary == kIdentification) { break; }
-                    response += "\r\n";
-                    slaveSDI12.sendResponse(response);
-                    sensor.SetActive(false);
-                }
-
-                // For compliance to cancel measurement if a correct address is detected
-                for (int a = 0; a < slaveSDI12.available(); a++) {
-                    char charReceived = slaveSDI12.read();
-                    if (charReceived == '!') {
-                        slaveSDI12.clearBuffer();
-                        break;
-                    } else {
-                        commandReceived += charReceived;
-                    }
-                }
-                if (!sensor.IsActive() ||
-                    SDI12Sensor::ParseCommand(commandReceived.c_str()).address == sensor.Address()) {
-                    for (size_t i = 0; i < (sizeof(dValues)/sizeof(*dValues)); i++) {
-                        dValues[i] = "";
-                    }
-                } else {
-                    // Populate the "dValues" String array with the values in SDI-12 format
-                    formatOutputSDI(measurementValues, dValues, measurement_count, SDI12_VALUES_STR_SIZE_75);
-                }
-                sensor.SetActive(false);
-                break;
-
-            case kStateHighMeasurement:
-                // For aHA! and aHB! commands
-                // Do whatever the sensor is supposed to do here
-                // For this example, we will just create arbitrary "simulated" sensor data
-                // NOTE: Your application might have a different data type (e.g. int) and
-                //       number of values to report!
-                // Response should be in following format atttnnn<CR><LF>
-                response += "000000";
-                // No need to perform measurement if identification requested
-                for (size_t i = 0; i < (sizeof(dValues)/sizeof(*dValues)); i++) {
-                    dValues[i] = "";
-                }
-                break;
-
-            case kStateContinuous:
-                // For aRx! commands
-                // Data should be available and broadcasted immediately similar to aDx! commands
-                // Message <values> length is limited to 75 characters long
-                // if (parsed_cmd.param1 < MEASUREMENT_ARRAY_MAX_SIZE) {
-                //     pollSensor(measurementValues, 'A');
-                //     char temp_string_value[SDI12_VALUE_STR_SIZE+1];
-                //     if (dtoa(measurementValues[parsed_cmd.param1], temp_string_value,6, SDI12_VALUE_STR_SIZE)) {
-                //         response += temp_string_value;
-                //     }
-                // } else {
-                //     // Do nothing
-                // }
-
-                // Add CRC if requested for appropriate commands
-                if (sensor.CrcRequested()) {
-                    SDI12CRC crc(response.c_str());
-                    response += crc.GetAscii();
-                }
-                break;
-
-            case kStateVerify:
-                // For aV!
-                // Response should be in following format atttn<CR><LF>
-                // Not implemented, return respond with "00000"
-                response += "0053";
-                // No need to perform measurement if identification requested
-                if (parsed_cmd.primary == kIdentification) { break; }
-                response += "\r\n";
-                slaveSDI12.sendResponse(response);
-                // For aV!, Send "service request" (<address><CR><LF>) when data is ready
-                response = sensor.Address();
-                
-                pollOxygenSensorInfo(dValues);
-                // aV! does not have a way to cancel
-                // Populate the "dValues" String array with the values in
-                // SDI-12 format up to 35 characters long max
-                for (size_t i = 3; i < (sizeof(dValues)/sizeof(*dValues)); i++) {
-                    dValues[i] = "";
-                }
-                // sensor.SetActive(false);
-                break;
-        }
-
-        if (sensor.IsActive() || parsed_cmd.primary == kAddressQuery) {
+            // Response should be in following format atttn<CR><LF>
+            if (measurement_count > 0) {
+                response += "002";
+                response += measurement_count;
+            } else {
+                response += "0000";
+            }
             response += "\r\n";
             slaveSDI12.sendResponse(response);
+
+            if (parsed_cmd.secondary == kIdentification) {
+                sensor.SetActive(false);
+                break;
+            }
+
+            if (measurement_count > 0) {
+                switch (parsed_cmd.param1) {
+                    case 1:
+                        pollSensor(measurementValues, 'O'); // Oxygen (ppO2)
+                        break;
+                    case 2:
+                        pollSensor(measurementValues, '%'); // Oxygen (%)
+                        break;
+                    case 3:
+                        pollSensor(measurementValues, 'T'); // Temperature
+                        break;
+                    case 4:
+                        pollSensor(measurementValues, 'P'); // Barometric Pressure
+                        break;
+                    case 5:
+                        pollSensor(measurementValues, 'e'); // Sensor Status
+                        break;
+                    default: // All values
+                        pollSensor(measurementValues, 'A'); // Request All
+                        break;
+                }
+            }
+
+            // For compliance to cancel measurement if a line break is detected
+            if (slaveSDI12.LineBreakReceived()) {
+                EmptyOutputSDIBuffer(dValues);
+                sensor.SetActive(false);
+                measurement_count = 0;
+                slaveSDI12.ClearLineMarkingReceived();
+            } else {
+                // Populate the "dValues" String array with the values in SDI-12 format
+                formatOutputSDI(measurementValues, dValues, measurement_count, SDI12_VALUES_STR_SIZE_35);
+                // For aM!, Send "service request" (<address><CR><LF>) when data is ready
+                response = sensor.Address();
+            }
+            break;
         }
-        sensor.SetState(kStateReady);
-        sensor.SetActive(false);
-        slaveSDI12.forceListen();   // sets SDI-12 pin as input to prepare for
-                                    // incoming message AGAIN
+        case kConcurrentMeasurement: {
+            // For aC!, aCx!, aCCx! commands
+            sensor.SetCrcRequest(parsed_cmd.CRC());
+            measurement_count = 0;
+            if (parsed_cmd.param1 == 0) {
+                measurement_count = 5;
+            } else if (parsed_cmd.param1 > 0 && parsed_cmd.param1 <= MEASUREMENT_ARRAY_MAX_SIZE) {
+                measurement_count = 1;
+            }
+
+            // Response should be in following format atttnn<CR><LF>
+            if (measurement_count > 0) {
+                response += "002";
+                if (measurement_count < 10) { response += "0"; }
+                response += measurement_count;
+            } else {
+                response += "00000";
+            }
+            response += "\r\n";
+            slaveSDI12.sendResponse(response);
+
+            if (parsed_cmd.secondary == kIdentification || measurement_count == 0) {
+                sensor.SetActive(false);
+                break;
+            }
+
+            if (measurement_count > 0) {
+                switch (parsed_cmd.param1) {
+                    case 1:
+                        pollSensor(measurementValues, 'O'); // Oxygen (ppO2)
+                        break;
+                    case 2:
+                        pollSensor(measurementValues, '%'); // Oxygen (%)
+                        break;
+                    case 3:
+                        pollSensor(measurementValues, 'T'); // Temperature
+                        break;
+                    case 4:
+                        pollSensor(measurementValues, 'P'); // Barometric Pressure
+                        break;
+                    case 5:
+                        pollSensor(measurementValues, 'e'); // Sensor Status
+                        break;
+                    default: // All values
+                        pollSensor(measurementValues, 'A'); // Request All
+                        break;
+                }
+            }
+
+            // For compliance to cancel measurement if a correct address is detected
+            if (DetectedValidAddress(sensor.Address())) {
+                EmptyOutputSDIBuffer(dValues);
+                measurement_count = 0;
+            } else {
+                // Populate the "dValues" String array with the values in SDI-12 format
+                formatOutputSDI(measurementValues, dValues, measurement_count, SDI12_VALUES_STR_SIZE_75);
+            }
+            sensor.SetActive(false);
+            break;
+        }
+        case kVerification: {
+            // For aV!
+            // Do whatever the sensor is supposed to do here
+            // For this example, we will just create arbitrary "simulated" sensor data
+            // NOTE: Your application might have a different data type (e.g. int) and
+            //       number of values to report!
+            sensor.SetCrcRequest(parsed_cmd.CRC());
+            measurement_count = 3;
+
+            // Response should be in following format atttn<CR><LF>
+            response += "0053\r\n";
+            slaveSDI12.sendResponse(response);
+
+            if (parsed_cmd.secondary == kIdentification) {
+                sensor.SetActive(false);
+                return;
+            }
+
+            pollOxygenSensorInfo(dValues);
+
+            // For compliance to cancel measurement if a line break is detected
+            if (slaveSDI12.LineBreakReceived()) {
+                EmptyOutputSDIBuffer(dValues);
+                sensor.SetActive(false);
+                measurement_count = 0;
+                slaveSDI12.ClearLineMarkingReceived();
+            } else {
+                // dValues already populated by pollOxygenSensorInfo(const char*)
+                // Populate the "dValues" String array with the values in SDI-12 format
+                // formatOutputSDI(measurementValues, dValues, measurement_count, SDI12_VALUES_STR_SIZE_35);
+                // For aV!, Send "service request" (<address><CR><LF>) when data is ready
+                response = sensor.Address();
+            }
+            break;
+        }
+        case kDataRequest: {
+            // For aDx!
+            if (parsed_cmd.param1 < MEASUREMENT_STR_ARRAY_MAX_ELEMENT) {
+                response += dValues[parsed_cmd.param1];
+            }
+            // Add CRC if requested for appropriate commands
+            if (sensor.CrcRequested()) {
+                SDI12CRC crc(response.c_str());
+                response += crc.ascii();
+            }
+            break;
+        }
+        case kContinuousMeasurement: {
+            // For aRx!, aRCx! Commands
+            sensor.SetCrcRequest(parsed_cmd.CRC());
+
+            if (parsed_cmd.param1 > 0) { break; } // No other measurement types
+            measurement_count = 5;
+
+            // TODO: Continous measurement
+            formatOutputSDI(measurementValues, dValues, measurement_count, SDI12_VALUES_STR_SIZE_75);
+
+            response += dValues[0];
+
+            if (sensor.CrcRequested()) {
+                SDI12CRC crc(response.c_str());
+                response += crc.ascii();
+            }
+            break;
+        }
+        case kHighVolumeASCII: {
+            // For aHA!
+            sensor.SetCrcRequest(parsed_cmd.CRC());
+            measurement_count = 0;
+
+            response += "000000";
+            formatOutputSDI(measurementValues, dValues, measurement_count, SDI12_VALUES_STR_SIZE_75);
+            break;
+        }
+        case kHighVolumeByte: {
+            // For aHB! command
+            // Currently not supported
+            measurement_count = 0;
+
+            // Response should be in following format atttnnn<CR><LF>
+            response += "000000";
+            break;
+        }
+        case kByteDataRequest: {
+            // For aDBx!
+            /* Not implemented, return respond with
+                1 byte - ascii address
+                2 byte - packet size (size in bytes of payload data)
+                1 byte - data type
+                ? byte - payload data
+                2 byte - crc if requested
+                */
+            // TODO: DataByte request
+            SDI12CRC crc;
+            crc.Add(sensor.Address());
+            slaveSDI12.MarkLine();
+            slaveSDI12.writeBytes(sensor.Address());
+            // Payload data size in number of bytes
+            slaveSDI12.writeBytes((uint16_t)0);
+            crc.Add((uint16_t)0);
+            // DataType
+            slaveSDI12.writeBytes((uint8_t)0);
+            crc.Add((uint8_t)0);
+            // Write CRC
+            slaveSDI12.writeBytes(crc.value());
+            sensor.SetActive(false);
+            break;
+        }
+        case kIdentification: {
+            // For aIX_001! - aIX_999!
+            // Identify Meta Group, for measurement field information,
+            // max length is 75 not including crc and <CR><LF>
+            /* Response should be in the following format <addr>,<field1>,<field2>,<additional>;
+            deliminated using ',' and ends with ';' followed by <CR><LF>
+            field1 - is ideally using SHEF codes
+            field2 - describes parameter units
+            additional (optional) - additional fields are to deliminated using ',' */
+            sensor.SetCrcRequest(parsed_cmd.CRC());
+
+            if (parsed_cmd.secondary == kMeasurement ||
+                parsed_cmd.secondary == kConcurrentMeasurement) {
+                if ((parsed_cmd.param1 == 0 && parsed_cmd.param2 == 1) ||
+                        (parsed_cmd.param2 == 1 && parsed_cmd.param1 == 1)) {
+                    response += ",OXY,mbar,oxygen (O2) partial pressure;";
+                } else if ((parsed_cmd.param1 == 0 && parsed_cmd.param2 == 2) ||
+                        (parsed_cmd.param2 == 1 && parsed_cmd.param1 == 2)) {
+                    response += ",%OX,%,oxygen (O2) percentage;";
+                } else if ((parsed_cmd.param1 == 0 && parsed_cmd.param2 == 3) ||
+                        (parsed_cmd.param2 == 1 && parsed_cmd.param1 == 3)) {
+                    response += ",T,degrees C,sensor temperature;";
+                } else if ((parsed_cmd.param1 == 0 && parsed_cmd.param2 == 4) ||
+                        (parsed_cmd.param2 == 1 && parsed_cmd.param1 == 4)) {
+                    response += ",P,mbar,barometric pressure;";
+                } else if ((parsed_cmd.param1 == 0 && parsed_cmd.param2 == 5) ||
+                        (parsed_cmd.param2 == 1 && parsed_cmd.param1 == 5)) {
+                    response += ",e,number,sensor status;";
+                }
+            } else if (parsed_cmd.secondary == kVerification) {
+                switch (parsed_cmd.param2) {
+                    case 1:
+                        response += ",# 0,YYYYY DDDDD,manufacture date;";
+                        break;
+                    case 2:
+                        response += ",# 1,serial;";
+                        break;
+                    case 3:
+                        response += ",# 2,software rev;";
+                        break;
+                }
+            }
+
+            if (sensor.CrcRequested()) {
+                SDI12CRC crc(response.c_str());
+                response += crc.ascii();
+            }
+            break;
+        }
+        default: {
+            // Debug purposes only
+            response += "--";
+            response += parsed_cmd.primary;
+            response += "-";
+            response += parsed_cmd.secondary;
+            response += "-";
+            response += parsed_cmd.param1;
+            response += "-";
+            response += parsed_cmd.param2;
+            break;
+        }
     }
+    if (sensor.IsActive()) {
+        response += "\r\n";
+        slaveSDI12.sendResponse(response);
+        sensor.SetActive(false);
+    }
+
+    SDI12Sensor::SetState(STATE_LOW_POWER);
+    slaveSDI12.forceListen();  // sets SDI-12 pin as input to prepare for
+                                // incoming message AGAIN
 }
