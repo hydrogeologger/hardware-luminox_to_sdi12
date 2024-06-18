@@ -27,13 +27,14 @@
  *  - Make an int variable for the "number of values to report" instead of the
  *    hard-coded 9s interspersed throughout the code
  */
+#include <EEPROM.h>
+
 #include <SDI12Node.h>
 #include <SDI12CRC.h>
 #include <SDI12Sensor.h>
 
 
 #define DATA_PIN 2  /*!< The pin of the SDI-12 data bus */
-#define SDI12_ADDRESS_EEPROM_ADDRESS 0
 #define POWER_PIN -1 /*!< The sensor power pin (or -1 if not switching power) */
 
 #define MEASUREMENT_ARRAY_MAX_SIZE 5 // Max size of floats/double array to hold sensor data
@@ -44,6 +45,12 @@
 #define SDI12SENSOR_MODEL "OXLUM "  // 6 Characters specifying sensor model
 #define SDI12SENSOR_VERSION "002"  // 3 characters specifying sensor version, Represent x.x.x
 #define SDI12SENSOR_OTHER_INFO "LUMINOX"  // (optional) up to 13 char for serial or other sensor info
+
+// EEPROM Mapping, EEPROM Address reference
+typedef enum EEPROMMap_e: uint8_t {
+    kEEPROMSensorAddress = 0,      // 1 Byte for sensor address
+    kEEPROMConfigFlag = 1    // 1 Byte for Configuration Flag
+} EEPROMMap_e;
 
 #define STATE_LOW_POWER 0
 #define STATE_DO_SOMETHING 1
@@ -58,7 +65,7 @@ typedef enum ExtendedCommand_e: uint8_t {
 
 // Create object by which to communicate with the SDI-12 bus on SDIPIN
 SDI12Node slaveSDI12(DATA_PIN);
-SDI12Sensor sensor('0');
+SDI12Sensor sensor(SDI12SENSOR_DEFAULT_ADDR);
 
 static uint8_t measurement_count = 0;
 
@@ -237,7 +244,10 @@ void parseSdi12Cmd(String command, SDI12Command *parsed_cmd) {
             // Change address command
             // Slave should respond with blank message (just the [new] address +
             // <CR> + <LF>)
-            SDI12Sensor::LastActive()->SetAddress(parsed_cmd->param1);
+            if (SDI12Sensor::LastActive()->SetAddress(parsed_cmd->param1) &&
+                    SDI12Sensor::LastActive()->Address() != (char)EEPROM.read(kEEPROMSensorAddress)) {
+                EEPROM.update(kEEPROMSensorAddress, SDI12Sensor::LastActive()->Address());
+            }
             responseStr = SDI12Sensor::LastActive()->Address();
             break;
         case kUnknown:
@@ -345,6 +355,11 @@ void setup() {
 
     SelectLuminoxMode(1);
     Serial.flush();
+
+    // Update sensor address from EEPROM if available and valid
+    if (!sensor.SetAddress((char)EEPROM.read(kEEPROMSensorAddress))) {
+        sensor.SetAddress(SDI12SENSOR_DEFAULT_ADDR);
+    };
 }
 
 void loop() {
