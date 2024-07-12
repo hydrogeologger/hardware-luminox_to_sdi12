@@ -43,7 +43,7 @@
 #define SDI12SENSOR_SDI12_PROTOCOL "13"  // Respresent v1.3
 #define SDI12SENSOR_COMPANY "UQGEC   "  // 8 Charactors depicting company name
 #define SDI12SENSOR_MODEL "OXLUM "  // 6 Characters specifying sensor model
-#define SDI12SENSOR_VERSION "002"  // 3 characters specifying sensor version, Represent x.x.x
+#define SDI12SENSOR_VERSION "010"  // 3 characters specifying sensor version, Represent x.x.x
 #define SDI12SENSOR_OTHER_INFO "LUMINOX"  // (optional) up to 13 char for serial or other sensor info
 
 // EEPROM Mapping, EEPROM Address reference
