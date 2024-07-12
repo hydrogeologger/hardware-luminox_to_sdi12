@@ -262,6 +262,7 @@ void parseSdi12Cmd(String command, SDI12Command *parsed_cmd) {
                 case kEXTPassThrough:
                     responseStr += ext_cmd;
                     sensor.SetActive(false);
+                    SDI12Sensor::SetState(STATE_SERIAL_PASSTHROUGH);
                     break;
                 case kEXTModeSelect:
                     responseStr += "XM=";
@@ -369,6 +370,10 @@ void loop() {
     SDI12Command parsed_cmd;
     String response = "";
 
+    // PASS THROUGH MODE
+    if (SDI12Sensor::state() == STATE_SERIAL_PASSTHROUGH) {
+        PassThroughMode();
+    }
 
     // If a byte is available, an SDI message is queued up. Read in the entire message
     // before proceding.  It may be more robust to add a single character per loop()
@@ -713,4 +718,66 @@ void loop() {
     SDI12Sensor::SetState(STATE_LOW_POWER);
     slaveSDI12.forceListen();  // sets SDI-12 pin as input to prepare for
                                 // incoming message AGAIN
+}
+
+
+void PassThroughMode(void) {
+    String commandReceived = "";
+    String response = "";
+    while (true) {
+        if (slaveSDI12.available() < 0) { slaveSDI12.clearBuffer(); }
+        while (slaveSDI12.available() > 0) {
+            char c = slaveSDI12.read();
+            if (c == '\x03' || c == '\n' || c == '\r') {
+                if (commandReceived.equals("exit!")) {
+                    break;
+                }
+
+                // Empty rx buffer
+                while (Serial.available()) {
+                    Serial.read();
+                }
+
+                // Send polling command
+                Serial.println(commandReceived);
+                Serial.flush();
+
+                // delay(2000);
+                // Blocking delay until a character exist in serial buffer
+                while (!Serial.available());
+
+                while(Serial.available() > 0) {
+                    char c = Serial.read();
+                    if ((c != '\n') && (c != '\r')) {
+                        response += c;
+                    }
+                    delay(2);  // 1 character ~ 1.04 ms @ 9600 baud
+                }
+                if (response.length() > 0) {
+                    response += "\r\n";
+                    slaveSDI12.sendResponse(response);  // write the response to the screen
+                }
+
+                slaveSDI12.forceListen(); // Force listen if command is not recognized
+                response = "";
+                commandReceived = "";
+                slaveSDI12.ClearLineMarkingReceived(); // Clear detected break marking
+                slaveSDI12.clearBuffer();
+            } else if (c >= 32 && c <= 126) {
+                commandReceived += String(c);
+            }
+            delay(10);  // 1 character ~ 8.33 ms @ 1200 baud
+        }
+
+        if (commandReceived.equals("exit!")) {
+            response = sensor.Address();
+            response += "\r\n";
+            slaveSDI12.sendResponse(response);
+            commandReceived = "";
+            slaveSDI12.clearBuffer();
+            slaveSDI12.ClearLineMarkingReceived();
+            SDI12Sensor::SetState(STATE_LOW_POWER);
+            return;  // Exit pass through mode
+        }
+    }
 }
